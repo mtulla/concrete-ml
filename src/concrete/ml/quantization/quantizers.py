@@ -33,6 +33,8 @@ def fill_from_kwargs(obj, klass, **kwargs):
         TypeError: if the types of the parameters in kwargs could not be converted
             to the corresponding types of members of klass
     """
+    if len(kwargs) == 0:
+        return obj, kwargs
 
     # Get the members of the parameter set structure
     hints = get_type_hints(klass)
@@ -1054,3 +1056,11 @@ class QuantizedArray:
             "De-quantized values must be float64 but got: " f"{type(self.values)=}",
         )
         return self.values
+
+    def tolist(self) -> list:
+        """Convert the qvalues to a list.
+
+        Returns:
+            List: List of qvalues.
+        """
+        return self.qvalues.tolist()

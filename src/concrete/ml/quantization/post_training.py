@@ -23,7 +23,7 @@ from .base_quantized_op import (
 from .quantized_module import QuantizedModule
 from .quantized_module_passes import PowerOfTwoScalingRoundPBSAdapter
 from .quantized_ops import QuantizedBrevitasQuant
-from .quantizers import QuantizationOptions, QuantizedArray, UniformQuantizer
+from .quantizers import QuantizationOptions, QuantizedArray, UniformQuantizationParameters, UniformQuantizer
 
 # pylint: disable=too-many-lines
 
@@ -280,6 +280,7 @@ class ONNXConverter:
         quantized_op: QuantizedOp,
         *calibration_data: numpy.ndarray,
         quantizers: List[Optional[UniformQuantizer]],
+        is_input_int: bool = False,
     ) -> Tuple[numpy.ndarray, Optional[UniformQuantizer]]:
         """Configure a graph operation according to model conversion mode.
 
@@ -302,6 +303,7 @@ class ONNXConverter:
         quantized_op: QuantizedOp,
         *calibration_data: numpy.ndarray,
         quantizers: List[Optional[UniformQuantizer]],
+        is_input_int:bool = False
     ) -> Tuple[numpy.ndarray, Optional[UniformQuantizer]]:
         """Calibrate the QuantizedOp with the previous layer's output calibration data.
 
@@ -318,6 +320,7 @@ class ONNXConverter:
         Returns:
             numpy.ndarray: the output of the newly calibrated layer.
         """
+        print(f"In _calibrate_layers_activation. ONXConverter={self}")
         # Calibrate the output of the layer
         raw_result = quantized_op.calibrate(*calibration_data)
 
@@ -331,14 +334,20 @@ class ONNXConverter:
         # Create new calibration data (output of the previous layer)
         # Use the op's input options (thus behavior in calibration is the same as in compilation)
         q_calibration_data: List[ONNXOpInputOutputType] = []
-        for data in calibration_data:
+        for idx, data in enumerate(calibration_data):
             is_clear_value = isinstance(data, RawOpOutput)
             if is_clear_value or data is None:
                 q_calibration_data.append(data)
             else:
-                q_calibration_data.append(
-                    QuantizedArray(n_bits, data, True, options=quantized_op.input_quant_opts)
-                )
+                if is_input_int:
+                    params = UniformQuantizationParameters(scale=1.0, zero_point=0, offset=0)
+                    q_calibration_data.append(
+                        QuantizedArray(n_bits, data, False, options=quantized_op.input_quant_opts, params=params)
+                    )
+                else:
+                    q_calibration_data.append(
+                        QuantizedArray(n_bits, data, True, options=quantized_op.input_quant_opts)
+                    )
 
         # Override, when necessary, the calibration data with data that is quantized with
         # layer quantizers that are overridden by the QAT graph quantizers
@@ -449,7 +458,7 @@ class ONNXConverter:
         )
 
     # pylint: disable-next=too-many-branches,too-many-statements
-    def _quantize_layers(self, *input_calibration_data: numpy.ndarray):
+    def _quantize_layers(self, *input_calibration_data: numpy.ndarray, is_input_int: bool = False):
         """Compute parameters for post-training quantization and generate quantized ops.
 
         Does a forward pass over a batch of data and compute all
@@ -510,6 +519,8 @@ class ONNXConverter:
 
         for node in graph.node:
             op_type = get_op_type(node)
+            print(f"op_type={op_type}")
+            print(f"node={node}")
 
             attributes = {attribute.name: get_attribute(attribute) for attribute in node.attribute}
 
@@ -624,8 +635,10 @@ class ONNXConverter:
                     node_override_quantizer.get(input_name, None)
                     for input_name in variable_input_names
                 )
+                is_layer_int = is_input_int and (node.input=="inp" or "inp" in node.input)
+                print(f"is_layer_int={is_layer_int}")
                 output_calibration_data, layer_quantizer = self._process_layer(
-                    quantized_op_instance, *curr_calibration_data, quantizers=layer_quant
+                    quantized_op_instance, *curr_calibration_data, quantizers=layer_quant, is_input_int=is_layer_int,
                 )
                 node_results[output_name] = output_calibration_data
                 node_override_quantizer[output_name] = layer_quantizer
@@ -681,7 +694,7 @@ class ONNXConverter:
                 node_results[output_name] = node_output[0]
                 constants.add(output_name)
 
-    def quantize_module(self, *calibration_data: numpy.ndarray) -> QuantizedModule:
+    def quantize_module(self, *calibration_data: numpy.ndarray, is_input_int: bool = False) -> QuantizedModule:
         """Quantize numpy module.
 
         Following https://arxiv.org/abs/1712.05877 guidelines.
@@ -697,7 +710,7 @@ class ONNXConverter:
         # First transform all parameters to their quantized version
         self._quantize_params()
 
-        self._quantize_layers(*calibration_data)
+        self._quantize_layers(*calibration_data, is_input_int=is_input_int)
 
         # Create quantized module from self.quant_layers_dict
         quantized_module = QuantizedModule(
@@ -983,6 +996,7 @@ class PostTrainingQATImporter(ONNXConverter):
         quantized_op: QuantizedOp,
         *calibration_data: numpy.ndarray,
         quantizers: List[Optional[UniformQuantizer]],
+        is_input_int: bool = False,
     ) -> Tuple[numpy.ndarray, Optional[UniformQuantizer]]:
         """Configure a graph operation by calibrating it for Quantization Aware Training.
 
@@ -1000,7 +1014,7 @@ class PostTrainingQATImporter(ONNXConverter):
         """
 
         return self._calibrate_layers_activation(
-            False, quantized_op, *calibration_data, quantizers=quantizers
+            False, quantized_op, *calibration_data, quantizers=quantizers, is_input_int=is_input_int,
         )
 
     def _process_initializer(

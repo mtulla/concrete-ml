@@ -288,6 +288,7 @@ def numpy_gemm(
     b_prime = numpy.transpose(b) if transB else b
     c_prime: Union[numpy.ndarray, float] = c if c is not None else 0
 
+    breakpoint()
     y = processed_alpha * numpy.matmul(a_prime, b_prime) + processed_beta * c_prime
 
     return (y,)

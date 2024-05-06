@@ -75,6 +75,7 @@ def build_quantized_module(
     n_bits: Union[int, Dict[str, int]] = MAX_BITWIDTH_BACKWARD_COMPATIBLE,
     rounding_threshold_bits: Union[None, int, Dict[str, Union[str, int]]] = None,
     reduce_sum_copy=False,
+    is_input_int: bool = False,
 ) -> QuantizedModule:
     """Build a quantized module from a Torch or ONNX model.
 
@@ -109,9 +110,14 @@ def build_quantized_module(
     # this batch size. The input set contains many examples, to determine a representative
     # bit-width, but for tracing we only take a single one. We need the ONNX tracing batch size to
     # match the batch size during FHE inference which can only be 1 for the moment.
-    dummy_input_for_tracing = tuple(
-        torch.from_numpy(val[[0], ::]).float() for val in inputset_as_numpy_tuple
-    )
+    if is_input_int:
+        dummy_input_for_tracing = tuple(
+            torch.from_numpy(val[[0], ::]).int() for val in inputset_as_numpy_tuple
+        )
+    else:
+        dummy_input_for_tracing = tuple(
+            torch.from_numpy(val[[0], ::]).float() for val in inputset_as_numpy_tuple
+        )
 
     # Create corresponding numpy model
     numpy_model = NumpyModule(model, dummy_input_for_tracing)
@@ -124,7 +130,7 @@ def build_quantized_module(
     # FIXME: mismatch here. We traced with dummy_input_for_tracing which made some operator
     # only work over shape of (1, ., .). For example, some reshape have newshape hardcoded based
     # on the inputset we sent in the NumpyModule.
-    quantized_module = post_training_quant.quantize_module(*inputset_as_numpy_tuple)
+    quantized_module = post_training_quant.quantize_module(*inputset_as_numpy_tuple, is_input_int=is_input_int)
     # FIXME: https://github.com/zama-ai/concrete-ml-internal/issues/4127
     if reduce_sum_copy:
         quantized_module.set_reduce_sum_copy()
@@ -146,6 +152,7 @@ def _compile_torch_or_onnx_model(
     verbose: bool = False,
     inputs_encryption_status: Optional[Sequence[str]] = None,
     reduce_sum_copy=False,
+    is_input_int: bool = False,
 ) -> QuantizedModule:
     """Compile a torch module or ONNX into an FHE equivalent.
 
@@ -199,6 +206,7 @@ def _compile_torch_or_onnx_model(
         n_bits=n_bits,
         rounding_threshold_bits=rounding_threshold_bits,
         reduce_sum_copy=reduce_sum_copy,
+        is_input_int=is_input_int,
     )
 
     # Check that p_error or global_p_error is not set in both the configuration and in the direct
@@ -332,6 +340,7 @@ def compile_onnx_model(
     verbose: bool = False,
     inputs_encryption_status: Optional[Sequence[str]] = None,
     reduce_sum_copy: bool = False,
+    is_input_int:bool = False,
 ) -> QuantizedModule:
     """Compile a torch module into an FHE equivalent.
 
@@ -394,6 +403,7 @@ def compile_onnx_model(
         verbose=verbose,
         inputs_encryption_status=inputs_encryption_status,
         reduce_sum_copy=reduce_sum_copy,
+        is_input_int=is_input_int,
     )
 
 
@@ -412,6 +422,7 @@ def compile_brevitas_qat_model(
     verbose: bool = False,
     inputs_encryption_status: Optional[Sequence[str]] = None,
     reduce_sum_copy: bool = False,
+    is_input_int: bool = False,
 ) -> QuantizedModule:
     """Compile a Brevitas Quantization Aware Training model.
 
@@ -458,9 +469,14 @@ def compile_brevitas_qat_model(
         convert_torch_tensor_or_numpy_array_to_numpy_array(val) for val in to_tuple(torch_inputset)
     )
 
-    dummy_input_for_tracing = tuple(
-        torch.from_numpy(val[[0], ::]).float() for val in inputset_as_numpy_tuple
-    )
+    if is_input_int:
+        dummy_input_for_tracing = tuple(
+            torch.from_numpy(val[[0], ::]).int() for val in inputset_as_numpy_tuple
+        )
+    else:
+        dummy_input_for_tracing = tuple(
+            torch.from_numpy(val[[0], ::]).float() for val in inputset_as_numpy_tuple
+        )
 
     output_onnx_file_path = Path(
         tempfile.mkstemp(suffix=".onnx")[1] if output_onnx_file is None else output_onnx_file
@@ -545,6 +561,7 @@ def compile_brevitas_qat_model(
         verbose=verbose,
         inputs_encryption_status=inputs_encryption_status,
         reduce_sum_copy=reduce_sum_copy,
+        is_input_int=is_input_int,
     )
 
     # Remove the tempfile if we used one
